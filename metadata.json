@@ -1,0 +1,5 @@
+{
+  "name": "UTM Coordinate Converter",
+  "description": "An application to convert UTM coordinates from an Excel file into standard geospatial formats like Shapefile, KML, and GeoJSON, with a map preview.",
+  "requestFramePermissions": []
+}
