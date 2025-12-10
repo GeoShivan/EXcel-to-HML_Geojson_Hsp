@@ -21,6 +21,7 @@ export interface ColumnMapping {
     northing: string | null;
     zone: string | null;
     hemisphere: 'N' | 'S';
+    label?: string | null;
 }
 
 // Declarations for global libraries from CDN
@@ -31,5 +32,6 @@ declare global {
         shpwrite: any;
         saveAs: (blob: Blob, filename: string) => void;
         L: any; // Leaflet
+        JSZip: any;
     }
 }

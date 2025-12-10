@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { FeatureCollection, ColumnMapping } from './types';
-import { parseExcelFile, getSheetData, convertToGeoJSON, exportToGeoJSON, exportToKML, exportToShapefile } from './services/fileConverter';
+import { parseExcelFile, getSheetData, convertToGeoJSON, exportToGeoJSON, exportToKMZ, exportToShapefile } from './services/fileConverter';
 
 const UploadIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -15,7 +15,7 @@ const FileIcon = () => (
 );
 
 const MapIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l5.447 2.724A1 1 0 0021 16.382V5.618a1 1 0 00-1.447-.894L15 7m-6 13v-6.5m6 10V7" /></svg>;
-const KMLIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v4m0 0h-4m4 0l-5-5" /></svg>;
+const KMZIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
 const ShapefileIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>;
 
 
@@ -26,13 +26,14 @@ const App: React.FC = () => {
     const [selectedSheet, setSelectedSheet] = useState<string>('');
     const [headers, setHeaders] = useState<string[]>([]);
     const [data, setData] = useState<any[][]>([]);
-    const [columnMapping, setColumnMapping] = useState<ColumnMapping>({ easting: null, northing: null, zone: null, hemisphere: 'N' });
+    const [columnMapping, setColumnMapping] = useState<ColumnMapping>({ easting: null, northing: null, zone: null, hemisphere: 'N', label: null });
     const [zoneInputMode, setZoneInputMode] = useState<'column' | 'manual'>('column');
     const [manualZone, setManualZone] = useState<string>('');
-    const [startRow, setStartRow] = useState<number>(1);
+    const [headerRow, setHeaderRow] = useState<number>(1);
     const [geoData, setGeoData] = useState<FeatureCollection | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
+    const [progress, setProgress] = useState<number>(0);
 
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -44,13 +45,14 @@ const App: React.FC = () => {
         setSelectedSheet('');
         setHeaders([]);
         setData([]);
-        setColumnMapping({ easting: null, northing: null, zone: null, hemisphere: 'N' });
+        setColumnMapping({ easting: null, northing: null, zone: null, hemisphere: 'N', label: null });
         setZoneInputMode('column');
         setManualZone('');
-        setStartRow(1);
+        setHeaderRow(1);
         setGeoData(null);
         setError(null);
         setIsLoading(false);
+        setProgress(0);
     };
 
     const handleFileChange = async (selectedFile: File) => {
@@ -84,7 +86,7 @@ const App: React.FC = () => {
     useEffect(() => {
         if (workbook && selectedSheet) {
             try {
-                const { headers: sheetHeaders, data: sheetData } = getSheetData(workbook, selectedSheet);
+                const { headers: sheetHeaders, data: sheetData } = getSheetData(workbook, selectedSheet, headerRow);
                 setHeaders(sheetHeaders);
                 setData(sheetData);
                 // Auto-map columns if common names exist
@@ -94,6 +96,7 @@ const App: React.FC = () => {
                     easting: sheetHeaders[lowerCaseHeaders.findIndex(h => h.includes('easting') || h === 'x')] || null,
                     northing: sheetHeaders[lowerCaseHeaders.findIndex(h => h.includes('northing') || h === 'y')] || null,
                     zone: sheetHeaders[lowerCaseHeaders.findIndex(h => h.includes('zone'))] || null,
+                    label: sheetHeaders[lowerCaseHeaders.findIndex(h => h.includes('name') || h.includes('label') || h.includes('id') || h === 'code')] || null,
                 }));
 
             } catch (err) {
@@ -101,36 +104,62 @@ const App: React.FC = () => {
                  console.error(err);
             }
         }
-    }, [workbook, selectedSheet]);
+    }, [workbook, selectedSheet, headerRow]);
+    
+    const handleClearMapping = () => {
+        setColumnMapping(prev => ({
+            ...prev, // Keep hemisphere
+            easting: null,
+            northing: null,
+            zone: null,
+            label: null,
+        }));
+    };
 
-    const handleConversion = () => {
+    const handleConversion = async () => {
         setError(null);
         setGeoData(null);
+    
+        const validationErrors: string[] = [];
+        if (!columnMapping.easting) {
+            validationErrors.push("Easting");
+        }
+        if (!columnMapping.northing) {
+            validationErrors.push("Northing");
+        }
+    
+        const isManualZone = zoneInputMode === 'manual';
+        const manualZoneNumber = isManualZone ? parseInt(manualZone, 10) : null;
+    
+        if (zoneInputMode === 'column' && !columnMapping.zone) {
+            validationErrors.push("Zone Column");
+        }
+    
+        let combinedError = "";
+        if (validationErrors.length > 0) {
+            combinedError += `Required column mapping missing for: ${validationErrors.join(', ')}. `;
+        }
+    
+        if (isManualZone && (isNaN(manualZoneNumber!) || manualZoneNumber! < 1 || manualZoneNumber! > 60)) {
+            combinedError += "Please enter a valid manual zone number (1-60).";
+        }
+    
+        if (combinedError) {
+            setError(combinedError.trim());
+            return;
+        }
+    
         setIsLoading(true);
-        setTimeout(() => { // Allow UI to update before blocking operation
-            try {
-                const isManualZone = zoneInputMode === 'manual';
-                const manualZoneNumber = isManualZone ? parseInt(manualZone, 10) : null;
-
-                if (!columnMapping.easting || !columnMapping.northing) {
-                    throw new Error("Please map Easting and Northing columns.");
-                }
-                if (zoneInputMode === 'column' && !columnMapping.zone) {
-                    throw new Error("Please select the Zone column.");
-                }
-                if (isManualZone && (isNaN(manualZoneNumber!) || manualZoneNumber! < 1 || manualZoneNumber! > 60)) {
-                    throw new Error("Please enter a valid zone number (1-60).");
-                }
-                
-                const convertedData = convertToGeoJSON(data, headers, columnMapping, startRow, isManualZone ? manualZoneNumber : null);
-                setGeoData(convertedData);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-                console.error(err);
-            } finally {
-                setIsLoading(false);
-            }
-        }, 50);
+        setProgress(0);
+        try {
+            const convertedData = await convertToGeoJSON(data, headers, columnMapping, isManualZone ? manualZoneNumber : null, setProgress);
+            setGeoData(convertedData);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            console.error(err);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     useEffect(() => {
@@ -155,6 +184,11 @@ const App: React.FC = () => {
                         .map(([key, value]) => `<b>${key}:</b> ${value}`)
                         .join('<br>');
                     layer.bindPopup(properties);
+                    
+                    // Show tooltip if 'name' property exists (set by label mapping)
+                    if (feature.properties.name) {
+                        layer.bindTooltip(String(feature.properties.name));
+                    }
                 }
             }).addTo(mapRef.current);
 
@@ -181,7 +215,7 @@ const App: React.FC = () => {
         }
     };
 
-    const handleExport = async (format: 'geojson' | 'kml' | 'shapefile') => {
+    const handleExport = async (format: 'geojson' | 'kmz' | 'shapefile') => {
         if (!geoData || !file) return;
         setError(null);
         try {
@@ -190,8 +224,8 @@ const App: React.FC = () => {
                 case 'geojson':
                     exportToGeoJSON(geoData, filename);
                     break;
-                case 'kml':
-                    exportToKML(geoData, filename);
+                case 'kmz':
+                    await exportToKMZ(geoData, filename);
                     break;
                 case 'shapefile':
                     await exportToShapefile(geoData, filename);
@@ -202,10 +236,16 @@ const App: React.FC = () => {
             console.error(err);
         }
     };
-
-    const isManualZoneInvalid = zoneInputMode === 'manual' && (manualZone === '' || isNaN(parseInt(manualZone)) || parseInt(manualZone) < 1 || parseInt(manualZone) > 60);
+    
+    const isEastingInvalid = !columnMapping.easting;
+    const isNorthingInvalid = !columnMapping.northing;
     const isColumnZoneInvalid = zoneInputMode === 'column' && !columnMapping.zone;
-    const isConvertDisabled = !columnMapping.easting || !columnMapping.northing || isColumnZoneInvalid || isManualZoneInvalid || isLoading;
+    const isManualZoneInvalid = zoneInputMode === 'manual' && (manualZone === '' || isNaN(parseInt(manualZone)) || parseInt(manualZone) < 1 || parseInt(manualZone) > 60);
+    const isConvertDisabled = isEastingInvalid || isNorthingInvalid || isColumnZoneInvalid || isManualZoneInvalid || isLoading;
+    
+    const baseSelectClasses = "w-full bg-gray-700 rounded-md shadow-sm transition-colors";
+    const validSelectClasses = "border-gray-600 focus:ring-emerald-500 focus:border-emerald-500";
+    const invalidSelectClasses = "border-red-500 focus:ring-red-500 focus:border-red-500";
 
 
     return (
@@ -213,7 +253,7 @@ const App: React.FC = () => {
             <div className="max-w-7xl mx-auto">
                 <header className="text-center mb-8">
                     <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-500">UTM Coordinate Converter</h1>
-                    <p className="mt-2 text-lg text-gray-400">Convert Excel UTM data to Shapefile, KML, or GeoJSON with ease.</p>
+                    <p className="mt-2 text-lg text-gray-400">Convert Excel UTM data to Shapefile, KMZ, or GeoJSON with ease.</p>
                 </header>
 
                 <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -249,7 +289,16 @@ const App: React.FC = () => {
                         {/* Step 2: Configure Data */}
                         {file && (
                            <div>
-                               <h2 className="text-2xl font-bold mb-4 border-b-2 border-emerald-500/30 pb-2">Step 2: Configure Data</h2>
+                               <div className="flex justify-between items-baseline mb-4 border-b-2 border-emerald-500/30 pb-2">
+                                   <h2 className="text-2xl font-bold">Step 2: Configure Data</h2>
+                                   <button 
+                                       onClick={handleClearMapping} 
+                                       className="text-sm text-cyan-400 hover:text-cyan-300 font-semibold transition-colors duration-150"
+                                   >
+                                       Clear Mappings
+                                   </button>
+                               </div>
+
                                <div className="space-y-4">
                                    <div>
                                        <label htmlFor="sheet" className="block text-sm font-medium text-gray-300 mb-1">Select Sheet</label>
@@ -261,22 +310,34 @@ const App: React.FC = () => {
                                     {headers.length > 0 && (
                                     <>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            {['easting', 'northing'].map(field => (
-                                                <div key={field}>
-                                                    <label htmlFor={field} className="block text-sm font-medium text-gray-300 mb-1 capitalize">{field}</label>
-                                                    <select
-                                                        id={field}
-                                                        value={columnMapping[field as 'easting' | 'northing'] || ''}
-                                                        onChange={(e) => setColumnMapping({...columnMapping, [field]: e.target.value})}
-                                                        className="w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"
-                                                    >
-                                                        <option value="">Select column...</option>
-                                                        {headers.map(h => <option key={h} value={h}>{h}</option>)}
-                                                    </select>
-                                                </div>
-                                            ))}
                                             <div>
-                                                <label className="block text-sm font-medium text-gray-300 mb-1">Zone</label>
+                                                <label htmlFor="easting" className="block text-sm font-medium text-gray-300 mb-1 capitalize">Easting <span className="text-red-400">*</span></label>
+                                                <select
+                                                    id="easting"
+                                                    value={columnMapping.easting || ''}
+                                                    onChange={(e) => setColumnMapping({...columnMapping, easting: e.target.value})}
+                                                    className={`${baseSelectClasses} ${isEastingInvalid ? invalidSelectClasses : validSelectClasses}`}
+                                                >
+                                                    <option value="">Select column...</option>
+                                                    {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label htmlFor="northing" className="block text-sm font-medium text-gray-300 mb-1 capitalize">Northing <span className="text-red-400">*</span></label>
+                                                <select
+                                                    id="northing"
+                                                    value={columnMapping.northing || ''}
+                                                    onChange={(e) => setColumnMapping({...columnMapping, northing: e.target.value})}
+                                                    className={`${baseSelectClasses} ${isNorthingInvalid ? invalidSelectClasses : validSelectClasses}`}
+                                                >
+                                                    <option value="">Select column...</option>
+                                                    {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-300 mb-1">
+                                                    Zone {zoneInputMode === 'column' && <span className="text-red-400">*</span>}
+                                                </label>
                                                 <div className="flex items-center space-x-4 mb-2">
                                                     <div className="flex items-center">
                                                         <input id="zone-column" name="zone-mode" type="radio" checked={zoneInputMode === 'column'} onChange={() => handleZoneModeChange('column')} className="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-500"/>
@@ -288,12 +349,22 @@ const App: React.FC = () => {
                                                     </div>
                                                 </div>
                                                 {zoneInputMode === 'column' ? (
-                                                    <select id="zone" value={columnMapping.zone || ''} onChange={(e) => setColumnMapping({ ...columnMapping, zone: e.target.value || null })} className="w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500">
+                                                    <select 
+                                                        id="zone" 
+                                                        value={columnMapping.zone || ''} 
+                                                        onChange={(e) => setColumnMapping({ ...columnMapping, zone: e.target.value || null })} 
+                                                        className={`${baseSelectClasses} ${isColumnZoneInvalid ? invalidSelectClasses : validSelectClasses}`}
+                                                    >
                                                         <option value="">Select column...</option>
                                                         {headers.map(h => <option key={h} value={h}>{h}</option>)}
                                                     </select>
                                                 ) : (
-                                                    <input type="number" id="manualZone" placeholder="e.g., 30" min="1" max="60" value={manualZone} onChange={e => setManualZone(e.target.value)} className="w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"/>
+                                                    <input type="number" id="manualZone" placeholder="e.g., 30" min="1" max="60" value={manualZone} onChange={e => setManualZone(e.target.value)} 
+                                                    className={`w-full bg-gray-700 rounded-md shadow-sm ${
+                                                        isManualZoneInvalid
+                                                            ? 'border-red-500 focus:ring-red-500 focus:border-red-500'
+                                                            : 'border-gray-600 focus:ring-emerald-500 focus:border-emerald-500'
+                                                    }`}/>
                                                 )}
                                             </div>
                                             <div>
@@ -308,34 +379,48 @@ const App: React.FC = () => {
                                                     <option value="S">South</option>
                                                 </select>
                                             </div>
+                                            
+                                            {/* Label Column Control */}
+                                            <div>
+                                                <label htmlFor="labelCol" className="block text-sm font-medium text-gray-300 mb-1">Label / Name (Optional)</label>
+                                                <select
+                                                    id="labelCol"
+                                                    value={columnMapping.label || ''}
+                                                    onChange={(e) => setColumnMapping({...columnMapping, label: e.target.value || null})}
+                                                    className={baseSelectClasses + " border-gray-600 focus:ring-emerald-500 focus:border-emerald-500"}
+                                                >
+                                                    <option value="">Select column...</option>
+                                                    {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                                                </select>
+                                            </div>
+
                                              <div>
-                                                <label htmlFor="startRow" className="block text-sm font-medium text-gray-300 mb-1">Data starts at row</label>
+                                                <label htmlFor="headerRow" className="block text-sm font-medium text-gray-300 mb-1">Header is on row</label>
                                                 <input
                                                     type="number"
-                                                    id="startRow"
+                                                    id="headerRow"
                                                     min="1"
-                                                    value={startRow}
-                                                    onChange={e => setStartRow(parseInt(e.target.value, 10) || 1)}
+                                                    value={headerRow}
+                                                    onChange={e => setHeaderRow(parseInt(e.target.value, 10) || 1)}
                                                     className="w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"
                                                 />
                                             </div>
                                         </div>
                                        
-                                        <button 
-                                            onClick={handleConversion} 
-                                            disabled={isConvertDisabled}
-                                            className="w-full mt-4 flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-500 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-emerald-500 transition-colors"
-                                        >
-                                            {isLoading && !geoData ? (
-                                                <>
-                                                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                  </svg>
-                                                  Converting...
-                                                </>
-                                            ) : 'Convert Data'}
-                                        </button>
+                                        <div className="mt-4">
+                                            <button 
+                                                onClick={handleConversion} 
+                                                disabled={isConvertDisabled}
+                                                className="w-full flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-500 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-emerald-500 transition-colors"
+                                            >
+                                                {isLoading && !geoData ? `Converting... ${progress}%` : 'Convert Data'}
+                                            </button>
+                                            {isLoading && !geoData && (
+                                                <div className="w-full bg-gray-600 rounded-full h-2.5 mt-3">
+                                                    <div className="bg-emerald-500 h-2.5 rounded-full transition-all duration-150 ease-linear" style={{ width: `${progress}%` }}></div>
+                                                </div>
+                                            )}
+                                        </div>
                                     </>
                                     )}
                                </div>
@@ -367,7 +452,10 @@ const App: React.FC = () => {
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                   </svg>
                                 <h3 className="text-xl font-semibold mt-4">Processing Data...</h3>
-                                <p className="mt-1">Please wait while we convert your coordinates.</p>
+                                <div className="w-3/4 bg-gray-600 rounded-full h-2.5 mt-4">
+                                    <div className="bg-emerald-500 h-2.5 rounded-full transition-all duration-150 ease-linear" style={{ width: `${progress}%` }}></div>
+                                </div>
+                                <p className="text-sm text-gray-500 mt-2">{progress}%</p>
                             </div>
                         )}
 
@@ -386,8 +474,8 @@ const App: React.FC = () => {
                                         <button onClick={() => handleExport('geojson')} className="flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-cyan-100 bg-cyan-600 hover:bg-cyan-700 transition-colors">
                                             <MapIcon /> GeoJSON
                                         </button>
-                                        <button onClick={() => handleExport('kml')} className="flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-amber-100 bg-amber-600 hover:bg-amber-700 transition-colors">
-                                           <KMLIcon /> KML
+                                        <button onClick={() => handleExport('kmz')} className="flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-amber-100 bg-amber-600 hover:bg-amber-700 transition-colors">
+                                           <KMZIcon /> KMZ
                                         </button>
                                         <button onClick={() => handleExport('shapefile')} className="flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md text-fuchsia-100 bg-fuchsia-600 hover:bg-fuchsia-700 transition-colors">
                                             <ShapefileIcon /> Shapefile
